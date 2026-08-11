@@ -123,12 +123,23 @@ function certPemToBase64(certificatePem) {
 }
 
 /**
- * Firma (enveloped) el elemento raíz `elementLocalName` (con atributo
+ * Firma (enveloped) el elemento `elementLocalName` (con atributo
  * ID=elementId) dentro de `xmlString`, usando la llave/certificado dados.
- * Devuelve el XML completo con el nodo <Signature> agregado como último
- * hijo de ese elemento.
+ * Devuelve el XML completo con el nodo <Signature> agregado.
+ *
+ * Por defecto la Signature se inserta como último hijo del MISMO elemento
+ * referenciado (firma "enveloped" clásica: Documento contiene su propia
+ * Signature). Si se pasa `containerLocalName` distinto de
+ * `elementLocalName`, la Signature se inserta como último hijo de ESE otro
+ * elemento en cambio (hermano del elemento referenciado, no descendiente)
+ * — es la convención real que usa el SII para el DTE: `<DTE><Documento
+ * ID=".."/><Signature/></DTE>`, donde Signature referencia a Documento por
+ * su ID pero vive como hermano suyo, no anidada dentro. Ambas formas son
+ * criptográficamente válidas (XMLDSig no exige que la Signature esté
+ * dentro del elemento que firma), pero el schema del SII espera la
+ * segunda para el DTE — ver signDocumentoEnDte.
  */
-function signElement(xmlString, { privateKeyPem, certificatePem, elementLocalName, elementId }) {
+function signElement(xmlString, { privateKeyPem, certificatePem, elementLocalName, elementId, containerLocalName }) {
   if (!privateKeyPem || !certificatePem) {
     throw new SignatureError('signElement requiere privateKeyPem y certificatePem');
   }
@@ -140,6 +151,7 @@ function signElement(xmlString, { privateKeyPem, certificatePem, elementLocalNam
       `El XML no contiene un atributo ID="${elementId}" en <${elementLocalName}> — agrégalo antes de firmar`
     );
   }
+  const insertInto = containerLocalName || elementLocalName;
 
   const sig = new SignedXml({
     privateKey: privateKeyPem,
@@ -164,7 +176,7 @@ function signElement(xmlString, { privateKeyPem, certificatePem, elementLocalNam
   });
 
   sig.computeSignature(xmlString, {
-    location: { reference: `//*[local-name(.)='${elementLocalName}']`, action: 'append' },
+    location: { reference: `//*[local-name(.)='${insertInto}']`, action: 'append' },
   });
 
   return sig.getSignedXml();
@@ -206,7 +218,10 @@ function signWholeDocument(xmlString, { privateKeyPem, certificatePem }) {
 
 /**
  * Firma el nodo <Documento ID="..."> completo de una Factura/Nota de
- * Crédito ya armada (con TED incluido).
+ * Crédito ya armada (con TED incluido), con la Signature ENVELOPED dentro
+ * del propio Documento. Válido criptográficamente, pero NO es la
+ * estructura que espera el schema del SII (EnvioDTE_v10.xsd) — usar
+ * signDocumentoEnDte para eso. Se mantiene por compatibilidad/tests.
  */
 function signDocumento(documentoXml, { privateKeyPem, certificatePem, documentoId }) {
   return signElement(documentoXml, {
@@ -214,6 +229,29 @@ function signDocumento(documentoXml, { privateKeyPem, certificatePem, documentoI
     certificatePem,
     elementLocalName: 'Documento',
     elementId: documentoId,
+  });
+}
+
+/**
+ * Firma un <Documento ID="..."> ya envuelto en <DTE version="1.0">...
+ * </DTE>, dejando la Signature como HERMANA de Documento dentro de DTE
+ * (no anidada en Documento) — la estructura real que usa el SII:
+ *
+ *   <DTE version="1.0">
+ *     <Documento ID="F1T33">...</Documento>
+ *     <Signature>...Reference URI="#F1T33"...</Signature>
+ *   </DTE>
+ *
+ * `dteXml` debe ser exactamente `<DTE version="1.0">` + el Documento sin
+ * firmar + `</DTE>` (ver dte.orchestrator.js).
+ */
+function signDocumentoEnDte(dteXml, { privateKeyPem, certificatePem, documentoId }) {
+  return signElement(dteXml, {
+    privateKeyPem,
+    certificatePem,
+    elementLocalName: 'Documento',
+    elementId: documentoId,
+    containerLocalName: 'DTE',
   });
 }
 
@@ -261,6 +299,7 @@ module.exports = {
   signElement,
   signWholeDocument,
   signDocumento,
+  signDocumentoEnDte,
   signEnvioDte,
   verifySignature,
   SignatureError,

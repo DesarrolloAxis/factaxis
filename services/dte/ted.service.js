@@ -56,7 +56,10 @@ function buildDD({
   bloqueCaf,
   timestamp = new Date().toISOString().slice(0, 19),
 }) {
-  if (!rutEmisor || !tipoDte || !folio || !fechaEmision || !rutReceptor || !montoTotal || !bloqueCaf) {
+  // OJO: montoTotal puede ser legítimamente 0 (Notas de Crédito/Débito de
+  // "corrige texto", sin efecto en montos) — no usar !montoTotal, que
+  // trataría 0 como "falta".
+  if (!rutEmisor || !tipoDte || !folio || !fechaEmision || !rutReceptor || montoTotal == null || !bloqueCaf) {
     throw new TedError('buildDD: faltan campos obligatorios para construir el bloque DD');
   }
 
