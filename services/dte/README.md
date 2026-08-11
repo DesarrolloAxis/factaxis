@@ -174,14 +174,32 @@ entre corridas.
    intercambio SOAP de semilla funciona de punta a punta contra el
    ambiente real.
 
+   **`getSeed`/`getToken` ya confirmados de punta a punta contra el SII
+   real** (ver arriba). `enviarDte` (POST multipart a `DTEUpload`) llegó a
+   ejecutarse contra el servidor real por primera vez y el SII respondió
+   con una página HTML genérica: *"HA OCURRIDO UN ERROR EN EL UPLOAD DEL
+   ARCHIVO DE DOCUMENTOS TRIBUTARIOS ELECTRONICOS"* — o sea, el POST llegó
+   y fue reconocido como intento de upload, pero algo del formato no
+   pasó. Investigando contra referencias públicas (el ejemplo oficial
+   `ejem_upload.txt` del propio sitio del SII, y la librería histórica
+   `niclabs/DTE`), confirmamos que el orden y nombres de los campos
+   multipart (`rutSender`→`dvSender`→`rutCompany`→`dvCompany`→`archivo`)
+   ya eran correctos, pero **faltaba el header `User-Agent`** — tanto el
+   ejemplo oficial del SII como `niclabs/DTE`
+   (`UPLOAD_SII_HEADER_VALUE`) mandan explícitamente
+   `Mozilla/4.0 (compatible; PROG 1.0; Windows NT 5.0; YComp 5.0.2.4)`,
+   y `https.request` de Node no manda ningún `User-Agent` por defecto —
+   es la hipótesis más probable de por qué el CGI legacy rechazó el
+   request. Ya agregado. Sigue pendiente de confirmar contra un envío
+   real exitoso.
+
    Pendiente de validar contra respuestas reales:
+   - Que el fix del `User-Agent` efectivamente resuelva el error de
+     upload (próximo intento).
    - El formato de respuesta de `GetTokenFromSeed.jws` (¿mismo patrón de
-     `xsi:type` + entidades que `CrSeed.jws`? probablemente sí, pero no
-     confirmado todavía).
-   - El formato multipart exacto que espera `/cgi_dte/UPL/DTEUpload`
-     (campos `rutSender`/`dvSender`/`rutCompany`/`dvCompany`/`archivo`
-     son la mejor aproximación disponible, no confirmados contra el
-     servicio real).
+     `xsi:type` + entidades que `CrSeed.jws`? probablemente sí, ya que
+     `CrSeed.jws` lo confirmó, pero falta ver una respuesta real de
+     `GetTokenFromSeed.jws` específicamente).
    - El mapeo de códigos de estado de `mapEstadoSii()` — es una
      aproximación razonable, no una tabla oficial confirmada.
 5. **Algoritmo de firma**: el pipeline usa SHA1withRSA / rsa-sha1 (lo
