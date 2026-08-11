@@ -156,17 +156,28 @@ entre corridas.
    al intentar `soap.createClientAsync(wsdl)`. La solución (ya aplicada):
    armar el sobre SOAP 1.1 a mano y mandarlo por HTTPS directo
    (`soapRequest()` en ese archivo), sin depender del parseo de WSDL.
-   `extractSoapReturn()` tolera tanto respuestas envueltas en CDATA como
-   en entidades XML escapadas (`&lt;...&gt;`), que son los dos formatos
-   que usan distintas implementaciones SOAP Java clásicas — no se pudo
-   confirmar cuál usa el SII exactamente sin ver una respuesta real
-   todavía (la conexión llegó a fallar en el parseo del WSDL antes de
-   llegar a esa parte), así que sigue pendiente validar el formato
-   preciso de la respuesta real y ajustar `extractSoapReturn`/`extractTag`
-   si hace falta. Lo que SÍ queda confirmado: la red desde Railway
-   alcanza `maullin.sii.cl` sin problema.
+
+   **Confirmado contra una respuesta real de `CrSeed.jws`** (CASO
+   4816286-1, folio 31, ambiente de certificación): el SII devuelve el
+   contenido de `getSeedReturn` escapado como entidades XML (no CDATA), y
+   el tag de apertura trae un atributo — `<getSeedReturn
+   xsi:type="xsd:string">...</getSeedReturn>`, no `<getSeedReturn>` a
+   secas. La primera versión de `extractSoapReturn()` no toleraba ese
+   atributo y fallaba con "No se pudo extraer SEMILLA de la respuesta"
+   aunque la llamada SOAP en sí había funcionado (`ESTADO=00`, semilla
+   real recibida). Ya corregido: el regex de `extractSoapReturn()` ahora
+   acepta atributos arbitrarios en el tag de apertura. Sigue sin
+   confirmarse el formato exacto de `GetTokenFromSeed.jws` y
+   `QueryEstUp.jws` (se asume el mismo patrón por analogía, pero falta
+   probarlo en un envío real completo). Lo que SÍ queda confirmado: la
+   red desde Railway alcanza `maullin.sii.cl` sin problema, y el
+   intercambio SOAP de semilla funciona de punta a punta contra el
+   ambiente real.
 
    Pendiente de validar contra respuestas reales:
+   - El formato de respuesta de `GetTokenFromSeed.jws` (¿mismo patrón de
+     `xsi:type` + entidades que `CrSeed.jws`? probablemente sí, pero no
+     confirmado todavía).
    - El formato multipart exacto que espera `/cgi_dte/UPL/DTEUpload`
      (campos `rutSender`/`dvSender`/`rutCompany`/`dvCompany`/`archivo`
      son la mejor aproximación disponible, no confirmados contra el
