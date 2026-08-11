@@ -147,13 +147,26 @@ entre corridas.
    separado). `caf.service.ingestarCaf` valida que el RUT emisor del CAF
    coincida con el tenant.
 3. **Cambiar `SII_CLIENT_MODE=soap`** y `tenants.ambiente_sii='certificacion'`.
-4. **`services/dte/sii-client/soap.client.js` NO ha sido probado contra
-   el SII real** (no había forma de hacerlo sin el certificado). Está
-   escrito según la documentación pública del SII y referencias como
-   LibreDTE, pero hay que validar/ajustar en cuanto se puedan correr las
-   pruebas de certificación reales, en particular:
-   - Nombres exactos de operación SOAP y estructura de respuesta de
-     `CrSeed.jws`, `GetTokenFromSeed.jws`, `QueryEstUp.jws`.
+4. **`services/dte/sii-client/soap.client.js` — YA PROBADO contra el SII
+   real (ambiente de certificación), con un hallazgo importante:** el
+   paquete npm `soap` (basado en parseo de WSDL) **no sirve** para
+   `CrSeed.jws` / `GetTokenFromSeed.jws` / `QueryEstUp.jws` — esos
+   webservices están publicados en estilo SOAP "RPC" antiguo y la
+   librería falla con `invalid message definition for rpc style binding`
+   al intentar `soap.createClientAsync(wsdl)`. La solución (ya aplicada):
+   armar el sobre SOAP 1.1 a mano y mandarlo por HTTPS directo
+   (`soapRequest()` en ese archivo), sin depender del parseo de WSDL.
+   `extractSoapReturn()` tolera tanto respuestas envueltas en CDATA como
+   en entidades XML escapadas (`&lt;...&gt;`), que son los dos formatos
+   que usan distintas implementaciones SOAP Java clásicas — no se pudo
+   confirmar cuál usa el SII exactamente sin ver una respuesta real
+   todavía (la conexión llegó a fallar en el parseo del WSDL antes de
+   llegar a esa parte), así que sigue pendiente validar el formato
+   preciso de la respuesta real y ajustar `extractSoapReturn`/`extractTag`
+   si hace falta. Lo que SÍ queda confirmado: la red desde Railway
+   alcanza `maullin.sii.cl` sin problema.
+
+   Pendiente de validar contra respuestas reales:
    - El formato multipart exacto que espera `/cgi_dte/UPL/DTEUpload`
      (campos `rutSender`/`dvSender`/`rutCompany`/`dvCompany`/`archivo`
      son la mejor aproximación disponible, no confirmados contra el
