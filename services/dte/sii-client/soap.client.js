@@ -174,6 +174,13 @@ function enviarDte(ambiente, { envioDteXml, rutEmisor, rutEnvia }, token) {
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
           'Content-Length': body.length,
           Cookie: `TOKEN=${token}`,
+          // El CGI legacy de DTEUpload rechaza (o al menos no se puede
+          // descartar que rechace) requests sin un User-Agent reconocible —
+          // este es el valor que usan tanto el ejemplo oficial del SII
+          // (ejem_upload.txt) como clientes históricos como niclabs/DTE
+          // (UPLOAD_SII_HEADER_VALUE). https.request de Node no manda
+          // User-Agent por defecto.
+          'User-Agent': 'Mozilla/4.0 (compatible; PROG 1.0; Windows NT 5.0; YComp 5.0.2.4)',
         },
       },
       (res) => {
