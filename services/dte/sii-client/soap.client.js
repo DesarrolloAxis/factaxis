@@ -79,13 +79,16 @@ function unescapeXmlEntities(value) {
 /**
  * Extrae el contenido de un elemento de respuesta SOAP (p.ej.
  * <getSeedReturn>...</getSeedReturn>), tolerando prefijo de namespace
- * (<ns1:getSeedReturn>), envoltura CDATA, y contenido XML escapado como
- * entidades (&lt;SEMILLA&gt;...) — los dos formatos que usan distintas
- * implementaciones SOAP Java clásicas como las del SII. Devuelve XML
- * "limpio" listo para extractTag().
+ * (<ns1:getSeedReturn>), atributos en el tag de apertura (el SII real
+ * devuelve <getSeedReturn xsi:type="xsd:string">...), envoltura CDATA, y
+ * contenido XML escapado como entidades (&lt;SEMILLA&gt;...) — los dos
+ * formatos que usan distintas implementaciones SOAP Java clásicas como
+ * las del SII. Devuelve XML "limpio" listo para extractTag().
  */
 function extractSoapReturn(soapBody, elementName) {
-  const match = soapBody.match(new RegExp(`<(?:\\w+:)?${elementName}>([\\s\\S]*?)<\\/(?:\\w+:)?${elementName}>`));
+  const match = soapBody.match(
+    new RegExp(`<(?:\\w+:)?${elementName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:\\w+:)?${elementName}>`)
+  );
   if (!match) return null;
   let inner = match[1].trim();
   const cdataMatch = inner.match(/^<!\[CDATA\[([\s\S]*)\]\]>$/);
