@@ -88,21 +88,32 @@ router.get('/setup/caf', async (req, res, next) => {
 
 /**
  * Genera un DTE de prueba end-to-end a partir de una "venta simulada":
- * body: { tipoDte (33|61, default 33), receptor: {rut, razonSocial},
+ * body: { tipoDte (33|56|61, default 33), receptor: {rut, razonSocial},
  *         items: [{productoId, cantidad, precioUnitario?, descuento?}],
- *         fechaEmision?, referenciaDocumentoId? (obligatorio si tipoDte=61),
- *         razonReferencia?, resolucion?: {nroResolucion, fechaResolucion} }
+ *         fechaEmision?, referenciaDocumentoId? (obligatorio si tipoDte=56/61),
+ *         razonReferencia?, codRefReferencia? (1|2|3),
+ *         soloReferencia? (true = NC/ND de texto, sin items),
+ *         resolucion?: {nroResolucion, fechaResolucion} }
  */
 router.post('/test/emitir', async (req, res, next) => {
   try {
-    const { tipoDte = 33, receptor, items, fechaEmision, referenciaDocumentoId, razonReferencia, resolucion } =
-      req.body;
+    const {
+      tipoDte = 33,
+      receptor,
+      items,
+      fechaEmision,
+      referenciaDocumentoId,
+      razonReferencia,
+      codRefReferencia,
+      soloReferencia,
+      resolucion,
+    } = req.body;
 
     if (!receptor?.rut || !receptor?.razonSocial) {
       return res.status(400).json({ error: 'Se requiere receptor: { rut, razonSocial }' });
     }
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'Se requiere items: [{ productoId, cantidad }]' });
+    if (!soloReferencia && (!Array.isArray(items) || items.length === 0)) {
+      return res.status(400).json({ error: 'Se requiere items: [{ productoId, cantidad }] (o soloReferencia: true)' });
     }
 
     const result = await orchestrator.emitir({
@@ -113,6 +124,8 @@ router.post('/test/emitir', async (req, res, next) => {
       fechaEmision,
       referenciaDocumentoId,
       razonReferencia,
+      codRefReferencia,
+      soloReferencia,
       resolucion,
     });
 

@@ -147,13 +147,37 @@ entre corridas.
    separado). `caf.service.ingestarCaf` valida que el RUT emisor del CAF
    coincida con el tenant.
 3. **Cambiar `SII_CLIENT_MODE=soap`** y `tenants.ambiente_sii='certificacion'`.
-4. **`services/dte/sii-client/soap.client.js` NO ha sido probado contra
-   el SII real** (no había forma de hacerlo sin el certificado). Está
-   escrito según la documentación pública del SII y referencias como
-   LibreDTE, pero hay que validar/ajustar en cuanto se puedan correr las
-   pruebas de certificación reales, en particular:
-   - Nombres exactos de operación SOAP y estructura de respuesta de
-     `CrSeed.jws`, `GetTokenFromSeed.jws`, `QueryEstUp.jws`.
+4. **`services/dte/sii-client/soap.client.js` — YA PROBADO contra el SII
+   real (ambiente de certificación), con un hallazgo importante:** el
+   paquete npm `soap` (basado en parseo de WSDL) **no sirve** para
+   `CrSeed.jws` / `GetTokenFromSeed.jws` / `QueryEstUp.jws` — esos
+   webservices están publicados en estilo SOAP "RPC" antiguo y la
+   librería falla con `invalid message definition for rpc style binding`
+   al intentar `soap.createClientAsync(wsdl)`. La solución (ya aplicada):
+   armar el sobre SOAP 1.1 a mano y mandarlo por HTTPS directo
+   (`soapRequest()` en ese archivo), sin depender del parseo de WSDL.
+
+   **Confirmado contra una respuesta real de `CrSeed.jws`** (CASO
+   4816286-1, folio 31, ambiente de certificación): el SII devuelve el
+   contenido de `getSeedReturn` escapado como entidades XML (no CDATA), y
+   el tag de apertura trae un atributo — `<getSeedReturn
+   xsi:type="xsd:string">...</getSeedReturn>`, no `<getSeedReturn>` a
+   secas. La primera versión de `extractSoapReturn()` no toleraba ese
+   atributo y fallaba con "No se pudo extraer SEMILLA de la respuesta"
+   aunque la llamada SOAP en sí había funcionado (`ESTADO=00`, semilla
+   real recibida). Ya corregido: el regex de `extractSoapReturn()` ahora
+   acepta atributos arbitrarios en el tag de apertura. Sigue sin
+   confirmarse el formato exacto de `GetTokenFromSeed.jws` y
+   `QueryEstUp.jws` (se asume el mismo patrón por analogía, pero falta
+   probarlo en un envío real completo). Lo que SÍ queda confirmado: la
+   red desde Railway alcanza `maullin.sii.cl` sin problema, y el
+   intercambio SOAP de semilla funciona de punta a punta contra el
+   ambiente real.
+
+   Pendiente de validar contra respuestas reales:
+   - El formato de respuesta de `GetTokenFromSeed.jws` (¿mismo patrón de
+     `xsi:type` + entidades que `CrSeed.jws`? probablemente sí, pero no
+     confirmado todavía).
    - El formato multipart exacto que espera `/cgi_dte/UPL/DTEUpload`
      (campos `rutSender`/`dvSender`/`rutCompany`/`dvCompany`/`archivo`
      son la mejor aproximación disponible, no confirmados contra el

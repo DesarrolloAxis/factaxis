@@ -6,28 +6,21 @@
  * así que activar el ambiente real es solo un cambio de configuración
  * (SII_CLIENT_MODE=soap) — ver services/dte/README.md.
  *
- * *** IMPORTANTE ***
- * Este cliente NO ha podido probarse contra el SII real todavía (depende
- * del certificado digital y CAF de certificación de ALMASEND, que son
- * trámites externos en curso). Las URLs, nombres de operación SOAP y el
- * formato exacto del multipart de envío están tomados de la documentación
- * pública del SII y de implementaciones de referencia (LibreDTE), pero
- * DEBEN validarse/ajustarse en cuanto haya certificado+CAF disponibles y
- * se puedan correr las pruebas de certificación reales. Ver README.
+ * *** IMPORTANTE — hallazgo real de certificación (ver README) ***
+ * getSeed/getToken/queryEstUp NO usan el paquete npm `soap`: los
+ * webservices clásicos del SII (CrSeed.jws, GetTokenFromSeed.jws,
+ * QueryEstUp.jws) están publicados en estilo SOAP "RPC" antiguo, que esa
+ * librería no logra parsear ("invalid message definition for rpc style
+ * binding" al intentar `soap.createClientAsync(wsdl)"). En su lugar,
+ * armamos el sobre SOAP a mano y lo mandamos por HTTPS directo — patrón
+ * común en integraciones Node.js con el SII por el mismo motivo.
  */
 
 const https = require('https');
-const soap = require('soap');
 
 const HOSTS = {
   certificacion: 'maullin.sii.cl',
   produccion: 'palena.sii.cl',
-};
-
-const WSDL = {
-  semilla: (host) => `https://${host}/DTEWS/CrSeed.jws?WSDL`,
-  token: (host) => `https://${host}/DTEWS/GetTokenFromSeed.jws?WSDL`,
-  consulta: (host) => `https://${host}/DTEWS/QueryEstUp.jws?WSDL`,
 };
 
 function hostFor(ambiente) {
@@ -36,35 +29,108 @@ function hostFor(ambiente) {
   return host;
 }
 
-/** Extrae el contenido de un tag simple de una respuesta XML-en-string del SII. */
+/** Envía un sobre SOAP 1.1 armado a mano por HTTPS POST y devuelve el body de la respuesta. */
+function soapRequest(host, path, soapAction, bodyXml) {
+  const envelope =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">' +
+    '<SOAP-ENV:Body>' +
+    bodyXml +
+    '</SOAP-ENV:Body>' +
+    '</SOAP-ENV:Envelope>';
+  const body = Buffer.from(envelope, 'utf8');
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        host,
+        path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/xml; charset=utf-8',
+          'Content-Length': body.length,
+          SOAPAction: soapAction,
+        },
+      },
+      (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          raw += chunk;
+        });
+        res.on('end', () => resolve({ statusCode: res.statusCode, body: raw }));
+      }
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function unescapeXmlEntities(value) {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Extrae el contenido de un elemento de respuesta SOAP (p.ej.
+ * <getSeedReturn>...</getSeedReturn>), tolerando prefijo de namespace
+ * (<ns1:getSeedReturn>), atributos en el tag de apertura (el SII real
+ * devuelve <getSeedReturn xsi:type="xsd:string">...), envoltura CDATA, y
+ * contenido XML escapado como entidades (&lt;SEMILLA&gt;...) — los dos
+ * formatos que usan distintas implementaciones SOAP Java clásicas como
+ * las del SII. Devuelve XML "limpio" listo para extractTag().
+ */
+function extractSoapReturn(soapBody, elementName) {
+  const match = soapBody.match(
+    new RegExp(`<(?:\\w+:)?${elementName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:\\w+:)?${elementName}>`)
+  );
+  if (!match) return null;
+  let inner = match[1].trim();
+  const cdataMatch = inner.match(/^<!\[CDATA\[([\s\S]*)\]\]>$/);
+  if (cdataMatch) inner = cdataMatch[1];
+  if (inner.includes('&lt;')) inner = unescapeXmlEntities(inner);
+  return inner;
+}
+
+/** Extrae el contenido de un tag simple (p.ej. <SEMILLA>123</SEMILLA>) de un XML ya "limpio". */
 function extractTag(xml, tag) {
   const match = xml && xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
   return match ? match[1] : null;
 }
 
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 async function getSeed(ambiente) {
   const host = hostFor(ambiente);
-  const client = await soap.createClientAsync(WSDL.semilla(host));
-  const [result] = await client.getSeedAsync({});
-  // La respuesta viene envuelta en un XML dentro del campo `getSeedReturn`.
-  const raw = result?.getSeedReturn;
-  const semilla = extractTag(raw, 'SEMILLA');
+  const { body } = await soapRequest(host, '/DTEWS/CrSeed.jws', '""', '<getSeed/>');
+  const inner = extractSoapReturn(body, 'getSeedReturn');
+  const semilla = inner && extractTag(inner, 'SEMILLA');
   if (!semilla) {
-    throw new Error(`[sii-client:soap] No se pudo extraer SEMILLA de la respuesta: ${raw}`);
+    throw new Error(`[sii-client:soap] No se pudo extraer SEMILLA de la respuesta: ${body}`);
   }
-  return { semilla, raw };
+  return { semilla, raw: body };
 }
 
 async function getToken(ambiente, semillaFirmadaXml) {
   const host = hostFor(ambiente);
-  const client = await soap.createClientAsync(WSDL.token(host));
-  const [result] = await client.getTokenAsync({ pszXml: semillaFirmadaXml });
-  const raw = result?.getTokenReturn;
-  const token = extractTag(raw, 'TOKEN');
+  const requestBody = `<getToken><pszXml>${escapeXml(semillaFirmadaXml)}</pszXml></getToken>`;
+  const { body } = await soapRequest(host, '/DTEWS/GetTokenFromSeed.jws', '""', requestBody);
+  const inner = extractSoapReturn(body, 'getTokenReturn');
+  const token = inner && extractTag(inner, 'TOKEN');
   if (!token) {
-    throw new Error(`[sii-client:soap] No se pudo extraer TOKEN de la respuesta: ${raw}`);
+    throw new Error(`[sii-client:soap] No se pudo extraer TOKEN de la respuesta: ${body}`);
   }
-  return { token, raw };
+  return { token, raw: body };
 }
 
 /**
@@ -133,19 +199,22 @@ function enviarDte(ambiente, { envioDteXml, rutEmisor, rutEnvia }, token) {
 
 async function queryEstUp(ambiente, { trackId, rutEmisor }, token) {
   const host = hostFor(ambiente);
-  const client = await soap.createClientAsync(WSDL.consulta(host));
   const [rutNum, dv] = String(rutEmisor).split('-');
-  const [result] = await client.getEstUpAsync({
-    RutEmpresa: rutNum,
-    DvEmpresa: dv,
-    Token: token,
-    TrackId: trackId,
-  });
-  const raw = result?.getEstUpReturn;
-  const estadoRaw = extractTag(raw, 'ESTADO');
-  const glosa = extractTag(raw, 'GLOSA');
+  const requestBody =
+    `<getEstUp>` +
+    `<RutCompania>${escapeXml(rutNum)}</RutCompania>` +
+    `<DvCompania>${escapeXml(dv)}</DvCompania>` +
+    `<RutReceptor>${escapeXml(rutNum)}</RutReceptor>` +
+    `<DvReceptor>${escapeXml(dv)}</DvReceptor>` +
+    `<TrackId>${escapeXml(trackId)}</TrackId>` +
+    `<Token>${escapeXml(token)}</Token>` +
+    `</getEstUp>`;
+  const { body } = await soapRequest(host, '/DTEWS/QueryEstUp.jws', '""', requestBody);
+  const inner = extractSoapReturn(body, 'getEstUpReturn') || body;
+  const estadoRaw = extractTag(inner, 'ESTADO');
+  const glosa = extractTag(inner, 'GLOSA');
 
-  return { estado: mapEstadoSii(estadoRaw), glosa, xmlRespuesta: raw };
+  return { estado: mapEstadoSii(estadoRaw), glosa, xmlRespuesta: inner };
 }
 
 /**
@@ -163,4 +232,13 @@ function mapEstadoSii(estadoRaw) {
   return 'en_proceso';
 }
 
-module.exports = { getSeed, getToken, enviarDte, queryEstUp, mapEstadoSii };
+module.exports = {
+  getSeed,
+  getToken,
+  enviarDte,
+  queryEstUp,
+  mapEstadoSii,
+  // exportados para tests / diagnóstico de respuestas SOAP crudas del SII:
+  extractSoapReturn,
+  soapRequest,
+};

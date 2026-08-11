@@ -64,7 +64,15 @@ function calcularMontos(lineas) {
  * que se comitea al final — el folio queda consumido pase lo que pase
  * después.
  */
-async function _crearBorradorConFolio({ tenantId, tipoDte, receptor, items, fechaEmision, referenciaDocumentoId }) {
+async function _crearBorradorConFolio({
+  tenantId,
+  tipoDte,
+  receptor,
+  items,
+  fechaEmision,
+  referenciaDocumentoId,
+  soloReferencia,
+}) {
   const tenant = await tenantsRepo.getById(tenantId);
   if (!tenant || !tenant.activo) {
     throw new OrchestratorError(`Tenant ${tenantId} no existe o está inactivo`);
@@ -74,33 +82,38 @@ async function _crearBorradorConFolio({ tenantId, tipoDte, receptor, items, fech
   // certificado, no tiene sentido consumir un folio que no se podrá firmar.
   await signatureService.getCertificadoActivo(tenantId);
 
-  if (!items || items.length === 0) {
-    throw new OrchestratorError('El documento requiere al menos una línea de detalle');
+  if (!soloReferencia && (!items || items.length === 0)) {
+    throw new OrchestratorError('El documento requiere al menos una línea de detalle (o soloReferencia: true)');
   }
 
   return withTransaction(async (client) => {
     const { folio, cafId, cafKeyRef } = await cafService.asignarFolio(tenantId, tipoDte, client);
 
-    const lineas = [];
-    for (const item of items) {
-      const producto = await productosRepo.getById(item.productoId, tenantId, client);
-      if (!producto) {
-        throw new OrchestratorError(`Producto ${item.productoId} no existe para este tenant`);
-      }
-      const precioUnitario = item.precioUnitario ?? Number(producto.precio_unitario);
-      const descuento = item.descuento || 0;
-      const montoItem = Math.round(item.cantidad * precioUnitario - descuento);
-      lineas.push({
-        productoId: producto.id,
-        nombre: producto.nombre,
-        cantidad: item.cantidad,
-        precioUnitario,
-        descuento,
-        montoItem,
-      });
-    }
+    let lineas = [];
+    let montoNeto = 0;
+    let montoIva = 0;
+    let montoTotal = 0;
 
-    const { montoNeto, montoIva, montoTotal } = calcularMontos(lineas);
+    if (!soloReferencia) {
+      for (const item of items) {
+        const producto = await productosRepo.getById(item.productoId, tenantId, client);
+        if (!producto) {
+          throw new OrchestratorError(`Producto ${item.productoId} no existe para este tenant`);
+        }
+        const precioUnitario = item.precioUnitario ?? Number(producto.precio_unitario);
+        const descuento = item.descuento || 0;
+        const montoItem = Math.round(item.cantidad * precioUnitario - descuento);
+        lineas.push({
+          productoId: producto.id,
+          nombre: producto.nombre,
+          cantidad: item.cantidad,
+          precioUnitario,
+          descuento,
+          montoItem,
+        });
+      }
+      ({ montoNeto, montoIva, montoTotal } = calcularMontos(lineas));
+    }
 
     const documento = await documentosRepo.insert(
       {
@@ -119,7 +132,9 @@ async function _crearBorradorConFolio({ tenantId, tipoDte, receptor, items, fech
       client
     );
 
-    await detalleRepo.insertMany(tenantId, documento.id, lineas, client);
+    if (lineas.length > 0) {
+      await detalleRepo.insertMany(tenantId, documento.id, lineas, client);
+    }
 
     return {
       tenant,
@@ -135,8 +150,14 @@ async function _crearBorradorConFolio({ tenantId, tipoDte, receptor, items, fech
   });
 }
 
-/** Construye el bloque <Referencia> para una Nota de Crédito (tipo 61). */
-async function _buildReferenciaXml(tenantId, referenciaDocumentoId, razonRef, client) {
+/**
+ * Construye el bloque <Referencia> para una Nota de Crédito/Débito
+ * (tipo 61/56). `codRef` es opcional: 1=Anula Documento Referencia,
+ * 2=Corrige Texto Documento Referencia, 3=Corrige Montos. El SII no lo
+ * exige siempre, pero certificación lo pide explícito en los casos de
+ * anulación/corrección de texto.
+ */
+async function _buildReferenciaXml(tenantId, referenciaDocumentoId, razonRef, codRef, client) {
   const original = await documentosRepo.getById(referenciaDocumentoId, tenantId, client);
   if (!original) {
     throw new OrchestratorError(`Documento de referencia ${referenciaDocumentoId} no existe para este tenant`);
@@ -148,6 +169,7 @@ async function _buildReferenciaXml(tenantId, referenciaDocumentoId, razonRef, cl
       `<TpoDocRef>${original.tipo_dte}</TpoDocRef>` +
       `<FolioRef>${original.folio}</FolioRef>` +
       `<FchRef>${new Date(original.fecha_emision).toISOString().slice(0, 10)}</FchRef>` +
+      (codRef ? `<CodRef>${codRef}</CodRef>` : '') +
       `<RazonRef>${escapeXml(razonRef || 'Anula Documento')}</RazonRef>` +
       `</Referencia>`,
     original,
@@ -162,6 +184,7 @@ function buildEncabezado({ tenant, tipoDte, folio, fechaEmision, receptor, monto
     `<RUTEmisor>${escapeXml(tenant.rut)}</RUTEmisor>` +
     `<RznSoc>${escapeXml(tenant.razon_social)}</RznSoc>` +
     `<GiroEmis>${escapeXml(tenant.giro)}</GiroEmis>` +
+    (tenant.acteco ? `<Acteco>${escapeXml(tenant.acteco)}</Acteco>` : '') +
     `<DirOrigen>${escapeXml(tenant.direccion)}</DirOrigen>` +
     `<CmnaOrigen>${escapeXml(tenant.comuna)}</CmnaOrigen>` +
     `</Emisor>` +
@@ -171,6 +194,7 @@ function buildEncabezado({ tenant, tipoDte, folio, fechaEmision, receptor, monto
     `</Receptor>` +
     `<Totales>` +
     `<MntNeto>${montos.montoNeto}</MntNeto>` +
+    `<TasaIVA>${Math.round(IVA_TASA * 100)}</TasaIVA>` +
     `<IVA>${montos.montoIva}</IVA>` +
     `<MntTotal>${montos.montoTotal}</MntTotal>` +
     `</Totales>` +
@@ -196,10 +220,12 @@ function buildDetalleXml(lineas) {
 
 /**
  * Emite un DTE completo de principio a fin. `input`:
- *   tenantId, tipoDte (33|61), receptor: {rut, razonSocial},
+ *   tenantId, tipoDte (33|56|61), receptor: {rut, razonSocial},
  *   items: [{ productoId, cantidad, precioUnitario?, descuento? }],
- *   fechaEmision (YYYY-MM-DD), referenciaDocumentoId? (obligatorio para 61),
- *   razonReferencia?, resolucion: { nroResolucion, fechaResolucion },
+ *   fechaEmision (YYYY-MM-DD), referenciaDocumentoId? (obligatorio para 56/61),
+ *   razonReferencia?, codRefReferencia? (1=Anula, 2=Corrige texto, 3=Corrige montos),
+ *   soloReferencia? (true = NC/ND "de texto", sin detalle ni montos — items no requeridos),
+ *   resolucion: { nroResolucion, fechaResolucion },
  *   clientMode? ('mock'|'soap', override para tests)
  */
 async function emitir(input) {
@@ -211,15 +237,17 @@ async function emitir(input) {
     fechaEmision = new Date().toISOString().slice(0, 10),
     referenciaDocumentoId,
     razonReferencia,
+    codRefReferencia,
+    soloReferencia = false,
     resolucion,
     clientMode,
   } = input;
 
-  if (![33, 61].includes(tipoDte)) {
-    throw new OrchestratorError('tipoDte debe ser 33 (Factura) o 61 (Nota de Crédito) en esta fase');
+  if (![33, 56, 61].includes(tipoDte)) {
+    throw new OrchestratorError('tipoDte debe ser 33 (Factura), 56 (Nota de Débito) o 61 (Nota de Crédito) en esta fase');
   }
-  if (tipoDte === 61 && !referenciaDocumentoId) {
-    throw new OrchestratorError('Una Nota de Crédito (61) requiere referenciaDocumentoId');
+  if ((tipoDte === 61 || tipoDte === 56) && !referenciaDocumentoId) {
+    throw new OrchestratorError('Una Nota de Crédito (61) o Débito (56) requiere referenciaDocumentoId');
   }
   if (!receptor || !receptor.rut) {
     throw new OrchestratorError('emitir requiere receptor.rut');
@@ -227,7 +255,15 @@ async function emitir(input) {
 
   // --- Paso 1 (transacción propia, se comitea): folio + borrador ---
   const { tenant, documentoId, folio, cafKeyRef, lineas, montoNeto, montoIva, montoTotal } =
-    await _crearBorradorConFolio({ tenantId, tipoDte, receptor, items, fechaEmision, referenciaDocumentoId });
+    await _crearBorradorConFolio({
+      tenantId,
+      tipoDte,
+      receptor,
+      items,
+      fechaEmision,
+      referenciaDocumentoId,
+      soloReferencia,
+    });
 
   // --- Paso 2 en adelante: fuera de la transacción. Cualquier error de
   // acá para abajo marca el documento como 'error' pero NO libera el folio. ---
@@ -235,8 +271,8 @@ async function emitir(input) {
     const documentoIdXml = `F${folio}T${tipoDte}`;
 
     let referenciaXml = '';
-    if (tipoDte === 61) {
-      const { xml } = await _buildReferenciaXml(tenantId, referenciaDocumentoId, razonReferencia);
+    if (tipoDte === 61 || tipoDte === 56) {
+      const { xml } = await _buildReferenciaXml(tenantId, referenciaDocumentoId, razonReferencia, codRefReferencia);
       referenciaXml = xml;
     }
 
@@ -263,7 +299,7 @@ async function emitir(input) {
         rutReceptor: receptor.rut,
         razonSocialReceptor: receptor.razonSocial,
         montoTotal,
-        primerItemGlosa: lineas[0].nombre,
+        primerItemGlosa: lineas[0]?.nombre || razonReferencia || '',
         bloqueCaf,
       },
       cafPrivateKeyPem
@@ -279,21 +315,28 @@ async function emitir(input) {
       `<TmstFirma>${timestampFirma}</TmstFirma>` +
       `</Documento>`;
 
-    const { privateKeyPem, certificatePem } = await signatureService.getCertificadoActivo(tenantId);
-    const documentoFirmado = signatureService.signDocumento(documentoXmlSinFirma, {
+    const { privateKeyPem, certificatePem, rutCertificado } = await signatureService.getCertificadoActivo(tenantId);
+
+    // Documento + Signature como hermanos dentro de <DTE> (estructura real
+    // del SII — ver signature.service.signDocumentoEnDte).
+    const dteXmlSinFirma = `<DTE version="1.0">${documentoXmlSinFirma}</DTE>`;
+    const dteFirmado = signatureService.signDocumentoEnDte(dteXmlSinFirma, {
       privateKeyPem,
       certificatePem,
       documentoId: documentoIdXml,
     });
 
-    await documentosRepo.setXmlYEstado(documentoId, tenantId, documentoFirmado, 'emitido');
+    await documentosRepo.setXmlYEstado(documentoId, tenantId, dteFirmado, 'emitido');
 
     const envioXml = envioService.buildEnvioDte({
       rutEmisor: tenant.rut,
-      rutEnvia: tenant.rut,
+      // RutEnvia = RUT del titular del certificado (mandatario), que
+      // puede ser una persona natural distinta de la empresa emisora —
+      // caso típico cuando el certificado está a nombre del representante.
+      rutEnvia: rutCertificado || tenant.rut,
       fechaResolucion: resolucion?.fechaResolucion || tenant.fecha_resolucion_sii || fechaEmision,
       nroResolucion: resolucion?.nroResolucion ?? tenant.nro_resolucion_sii ?? '0',
-      documentosFirmadosXml: [documentoFirmado],
+      documentosFirmadosXml: [dteFirmado],
       tipoDte,
       envioId: 'SetDoc',
       setDteId: 'SetDocInner',

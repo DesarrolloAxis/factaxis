@@ -11,7 +11,7 @@ const { pool } = require('../pool');
 
 async function getById(tenantId, client = pool) {
   const { rows } = await client.query(
-    `SELECT id, rut, razon_social, giro, direccion, comuna, ambiente_sii,
+    `SELECT id, rut, razon_social, giro, direccion, comuna, acteco, ambiente_sii,
             nro_resolucion_sii, fecha_resolucion_sii, activo
      FROM tenants
      WHERE id = $1`,
@@ -22,7 +22,7 @@ async function getById(tenantId, client = pool) {
 
 async function getByRut(rut, client = pool) {
   const { rows } = await client.query(
-    `SELECT id, rut, razon_social, giro, direccion, comuna, ambiente_sii,
+    `SELECT id, rut, razon_social, giro, direccion, comuna, acteco, ambiente_sii,
             nro_resolucion_sii, fecha_resolucion_sii, activo
      FROM tenants
      WHERE rut = $1`,
