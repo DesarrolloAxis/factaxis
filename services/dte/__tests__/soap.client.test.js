@@ -8,7 +8,7 @@
  * y con/sin prefijo de namespace.
  */
 
-const { extractSoapReturn } = require('../sii-client/soap.client');
+const { extractSoapReturn, buildEnviarDteBody } = require('../sii-client/soap.client');
 
 describe('soap.client — extractSoapReturn', () => {
   test('extrae contenido envuelto en CDATA', () => {
@@ -55,5 +55,47 @@ describe('soap.client — extractSoapReturn', () => {
   test('devuelve null si el elemento no existe', () => {
     const body = '<Body><otraCosa/></Body>';
     expect(extractSoapReturn(body, 'getSeedReturn')).toBeNull();
+  });
+});
+
+describe('soap.client — buildEnviarDteBody', () => {
+  // Regresión de un rechazo real del SII ("SCH-00001: Invalid Schema
+  // Name", CASO 4816286-1 folio 30) que persistía incluso con el schema
+  // (EnvioDTE sin ID) y la firma (C14N) ya corregidos — el XML no
+  // declaraba encoding y el SII histórico espera ISO-8859-1.
+  test('declara el prólogo XML con encoding ISO-8859-1 antes del elemento raíz', () => {
+    const { body } = buildEnviarDteBody({
+      envioDteXml: '<EnvioDTE version="1.0"><SetDTE ID="SetDoc"/></EnvioDTE>',
+      rutEmisor: '78138404-6',
+      rutEnvia: '78138404-6',
+    });
+    const raw = body.toString('latin1');
+    expect(raw).toContain('<?xml version="1.0" encoding="ISO-8859-1"?><EnvioDTE');
+    expect(raw).toContain('Content-Type: text/xml; charset=ISO-8859-1');
+  });
+
+  test('codifica tildes/eñe como bytes ISO-8859-1, no como UTF-8 multibyte', () => {
+    const { body } = buildEnviarDteBody({
+      envioDteXml: '<EnvioDTE version="1.0"><RznSoc>Cajón Peña SpA</RznSoc></EnvioDTE>',
+      rutEmisor: '78138404-6',
+      rutEnvia: '78138404-6',
+    });
+    // "ó" en latin1 es un solo byte (0xF3); en UTF-8 serían dos (0xC3 0xB3).
+    expect(body.includes(Buffer.from([0xf3]))).toBe(true);
+    expect(body.toString('latin1')).toContain('Cajón Peña SpA');
+  });
+
+  test('el orden y nombres de los campos del multipart no cambian (rutSender→dvSender→rutCompany→dvCompany→archivo)', () => {
+    const { body } = buildEnviarDteBody({
+      envioDteXml: '<EnvioDTE version="1.0"/>',
+      rutEmisor: '78138404-6',
+      rutEnvia: '16891500-4',
+    });
+    const raw = body.toString('latin1');
+    const order = ['name="rutSender"', 'name="dvSender"', 'name="rutCompany"', 'name="dvCompany"', 'name="archivo"'];
+    const positions = order.map((needle) => raw.indexOf(needle));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(raw).toContain('name="rutSender"\r\n\r\n16891500'); // rutEnvia, no rutEmisor
   });
 });

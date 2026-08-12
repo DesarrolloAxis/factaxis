@@ -220,8 +220,26 @@ entre corridas.
      `<EnvioDTE>` que lo va a envolver, y un test dedicado en
      `signature.service.test.js` reproduce el bug y confirma el fix.
 
+   **Con ambos fixes arriba (schema + firma) el SII siguió rechazando con
+   el mismo `SCH-00001: Invalid Schema Name`** — la firma y el schema ya
+   validaban localmente, así que el problema estaba en otro lado. Tercer
+   hallazgo: **el XML no declaraba encoding**. El SII histórico espera el
+   `EnvioDTE` en **ISO-8859-1**, no UTF-8 (convención documentada en
+   varias integraciones reales de terceros, heredada de los 2000). Sin
+   `<?xml version="1.0" encoding="..."?>` y con contenido real que trae
+   tildes (`Cajón`, `Villa Alemana`, etc.) mandado como UTF-8 sin avisar,
+   un parser Java legacy puede interpretarlo mal y rechazarlo con el mismo
+   error de schema genérico. `soap.client.js` ahora antepone
+   `<?xml version="1.0" encoding="ISO-8859-1"?>` al `EnvioDTE` y codifica
+   el body completo del multipart como `latin1` (equivalente práctico a
+   ISO-8859-1 para el rango de caracteres que aparece en datos de negocio
+   en español) — el prólogo va antes del elemento raíz, así que no toca
+   ningún digest XMLDSig ya calculado. Ver `buildEnviarDteBody()`
+   (refactor de `enviarDte()` para poder testear la construcción del body
+   sin red) y sus tests.
+
    Pendiente de validar contra un envío real exitoso (folio 30 sigue sin
-   confirmarse aceptado — próximo intento con ambos fixes).
+   confirmarse aceptado — próximo intento con los tres fixes).
 
    Pendiente de validar contra respuestas reales:
    - El formato de respuesta de `GetTokenFromSeed.jws` (¿mismo patrón de
