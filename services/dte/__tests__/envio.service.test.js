@@ -23,19 +23,21 @@ describe('envio.service (mock)', () => {
     await closePool();
   });
 
-  test('buildEnvioDte exige envioId y setDteId distintos', () => {
-    expect(() =>
-      envioService.buildEnvioDte({
-        rutEmisor: tenant.rut,
-        rutEnvia: tenant.rut,
-        fechaResolucion: '2024-01-01',
-        nroResolucion: '80',
-        documentosFirmadosXml: ['<Documento/>'],
-        tipoDte: 33,
-        envioId: 'X',
-        setDteId: 'X',
-      })
-    ).toThrow(envioService.EnvioError);
+  test('buildEnvioDte: <EnvioDTE> no lleva atributo ID (solo "version") — EnvioDTE_v10.xsd real del SII', () => {
+    // Regresión de un rechazo real del SII: "SCH-00001: Invalid Schema
+    // Name" al mandar <EnvioDTE ... ID="SetDoc">, que el schema no
+    // declara. El único ID del sobre vive en <SetDTE>.
+    const envioXml = envioService.buildEnvioDte({
+      rutEmisor: tenant.rut,
+      rutEnvia: tenant.rut,
+      fechaResolucion: '2024-01-01',
+      nroResolucion: '80',
+      documentosFirmadosXml: ['<Documento/>'],
+      tipoDte: 33,
+      setDteId: 'SetDoc',
+    });
+    expect(envioXml).not.toMatch(/<EnvioDTE[^>]*\bID=/);
+    expect(envioXml).toContain('<SetDTE ID="SetDoc">');
   });
 
   test('build + sign + enviar: EnvioDTE queda firmado y dte_envios registra el track_id', async () => {

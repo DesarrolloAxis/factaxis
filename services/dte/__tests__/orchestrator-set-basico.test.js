@@ -55,7 +55,7 @@ describe('dte.orchestrator — ajustes del SET BASICO real', () => {
     });
 
     const doc = await documentosRepo.getById(result.documentoId, tenant.id);
-    expect(doc.xml_dte).toMatch(/^<DTE version="1\.0">/);
+    expect(doc.xml_dte).toMatch(/^<DTE xmlns="http:\/\/www\.sii\.cl\/SiiDte"[^>]*version="1\.0">/);
     expect(doc.xml_dte).toContain('</Documento><Signature');
     expect(doc.xml_dte.trim().endsWith('</DTE>')).toBe(true);
 
@@ -108,6 +108,40 @@ describe('dte.orchestrator — ajustes del SET BASICO real', () => {
 
     expect(envioXmlCapturado).toContain(`<RutEmisor>${tenant.rut}</RutEmisor>`);
     expect(envioXmlCapturado).toContain('<RutEnvia>16891500-4</RutEnvia>');
+  });
+
+  test('el EnvioDTE no lleva ID en <EnvioDTE> (solo en <SetDTE>) — SCH-00001 real del SII', async () => {
+    // Regresión: el SII rechazó un envío real (CASO 4816286-1, folio 30)
+    // con "SCH-00001: Invalid Schema Name" porque el código viejo le
+    // ponía ID="SetDoc" a <EnvioDTE>, atributo que EnvioDTE_v10.xsd no
+    // declara (solo declara "version"). El ID real vive en <SetDTE>, y
+    // es lo que la Signature del sobre debe referenciar.
+    let envioXmlCapturado;
+    const original = mockClient.enviarDte;
+    mockClient.enviarDte = async (ambiente, params, token) => {
+      envioXmlCapturado = params.envioDteXml;
+      return original(ambiente, params, token);
+    };
+    try {
+      await orchestrator.emitir({
+        tenantId: tenant.id,
+        tipoDte: 33,
+        receptor: { rut: '60803000-K', razonSocial: 'IMPUESTOS INTERNOS CHILE' },
+        items: [{ productoId: productos[0].id, cantidad: 1 }],
+        fechaEmision: '2026-08-10',
+      });
+    } finally {
+      mockClient.enviarDte = original;
+    }
+
+    expect(envioXmlCapturado).not.toMatch(/<EnvioDTE[^>]*\bID=/);
+    expect(envioXmlCapturado).toMatch(/^<EnvioDTE[^>]*>\s*<SetDTE ID="[^"]+">/);
+
+    const { certificatePem } = await signatureService.getCertificadoActivo(tenant.id);
+    // El sobre trae 2 firmas: la del Documento (dentro de DTE) y la del
+    // SetDTE (la del sobre completo) — ambas deben validar.
+    expect(signatureService.verifySignature(envioXmlCapturado, certificatePem, { signatureIndex: 0 })).toBe(true);
+    expect(signatureService.verifySignature(envioXmlCapturado, certificatePem, { signatureIndex: 1 })).toBe(true);
   });
 
   test('Nota de Credito "corrige texto" (soloReferencia): sin Detalle, monto 0, con CodRef', async () => {

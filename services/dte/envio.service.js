@@ -64,12 +64,8 @@ function buildEnvioDte({
   nroResolucion,
   documentosFirmadosXml,
   tipoDte,
-  envioId = 'SetDoc',
-  setDteId = 'SetDocInner',
+  setDteId = 'SetDoc',
 }) {
-  if (envioId === setDteId) {
-    throw new EnvioError('envioId y setDteId deben ser distintos (IDs duplicados invalidan la firma XMLDSig)');
-  }
   if (!Array.isArray(documentosFirmadosXml) || documentosFirmadosXml.length === 0) {
     throw new EnvioError('buildEnvioDte requiere al menos un documento firmado');
   }
@@ -84,17 +80,29 @@ function buildEnvioDte({
 
   const setDte = `<SetDTE ID="${setDteId}">${caratula}${documentosFirmadosXml.join('')}</SetDTE>`;
 
+  // OJO: EnvioDTE_v10.xsd (schema real del SII) solo declara el atributo
+  // "version" en <EnvioDTE> — el atributo "ID" NO existe ahí, pertenece a
+  // <SetDTE>. Agregarlo (como hacía una versión anterior de este código)
+  // produce un rechazo real del SII: "SCH-00001: Invalid Schema Name"
+  // (confirmado contra maullin.sii.cl, CASO 4816286-1 folio 30). La firma
+  // del sobre referencia el ID de SetDTE, no uno inventado en EnvioDTE —
+  // ver signEnvioDte más abajo.
   return (
     `<EnvioDTE xmlns="http://www.sii.cl/SiiDte" ` +
     `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
     `xsi:schemaLocation="http://www.sii.cl/SiiDte EnvioDTE_v10.xsd" ` +
-    `version="1.0" ID="${envioId}">${setDte}</EnvioDTE>`
+    `version="1.0">${setDte}</EnvioDTE>`
   );
 }
 
-/** Firma el EnvioDTE completo con el certificado del tenant. */
-function signEnvioDte(envioDteXml, { privateKeyPem, certificatePem, envioId = 'SetDoc' }) {
-  return signatureService.signEnvioDte(envioDteXml, { privateKeyPem, certificatePem, envioId });
+/**
+ * Firma el EnvioDTE completo. La Signature referencia el <SetDTE ID="...">
+ * (único elemento con ID en el sobre) y se inserta como hermana suya
+ * dentro de <EnvioDTE> — la estructura real que exige el SII (ver
+ * EnvioDTE_v10.xsd: secuencia SetDTE, ds:Signature).
+ */
+function signEnvioDte(envioDteXml, { privateKeyPem, certificatePem, setDteId = 'SetDoc' }) {
+  return signatureService.signEnvioDte(envioDteXml, { privateKeyPem, certificatePem, setDteId });
 }
 
 /**
