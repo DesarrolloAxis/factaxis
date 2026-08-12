@@ -319,7 +319,25 @@ async function emitir(input) {
 
     // Documento + Signature como hermanos dentro de <DTE> (estructura real
     // del SII — ver signature.service.signDocumentoEnDte).
-    const dteXmlSinFirma = `<DTE version="1.0">${documentoXmlSinFirma}</DTE>`;
+    //
+    // OJO — bug real encontrado contra el SII (CASO 4816286-1, folio 30):
+    // este <DTE> se firma AHORA, standalone, pero se transmite después
+    // embebido dentro de <EnvioDTE xmlns="http://www.sii.cl/SiiDte"
+    // xmlns:xsi="...">. El SII exige canonicalización C14N "plain" (no
+    // exclusive-c14n), y esa variante SÍ arrastra los namespaces del
+    // ancestro hacia la forma canónica del nodo raíz del subset firmado
+    // — es su comportamiento documentado, la razón por la que existe
+    // Exclusive C14N. Si el <DTE> no declara sus propios xmlns (idénticos
+    // a los que declarará el <EnvioDTE> que lo va a envolver), el digest
+    // calculado acá y el que ve el SII al validar difieren, y la firma
+    // del Documento queda inválida apenas se arma el sobre — confirmado
+    // con un test que reproduce el envío real (ver
+    // orchestrator-set-basico.test.js). Repetir los mismos xmlns acá
+    // hace que la forma canónica sea idéntica en ambos momentos.
+    const dteXmlSinFirma =
+      `<DTE xmlns="http://www.sii.cl/SiiDte" ` +
+      `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
+      `version="1.0">${documentoXmlSinFirma}</DTE>`;
     const dteFirmado = signatureService.signDocumentoEnDte(dteXmlSinFirma, {
       privateKeyPem,
       certificatePem,
@@ -338,13 +356,12 @@ async function emitir(input) {
       nroResolucion: resolucion?.nroResolucion ?? tenant.nro_resolucion_sii ?? '0',
       documentosFirmadosXml: [dteFirmado],
       tipoDte,
-      envioId: 'SetDoc',
-      setDteId: 'SetDocInner',
+      setDteId: 'SetDoc',
     });
     const envioFirmado = envioService.signEnvioDte(envioXml, {
       privateKeyPem,
       certificatePem,
-      envioId: 'SetDoc',
+      setDteId: 'SetDoc',
     });
 
     await siiAuth.getToken(tenantId, { clientMode });

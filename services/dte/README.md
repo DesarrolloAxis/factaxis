@@ -189,13 +189,41 @@ entre corridas.
    (`UPLOAD_SII_HEADER_VALUE`) mandan explícitamente
    `Mozilla/4.0 (compatible; PROG 1.0; Windows NT 5.0; YComp 5.0.2.4)`,
    y `https.request` de Node no manda ningún `User-Agent` por defecto —
-   es la hipótesis más probable de por qué el CGI legacy rechazó el
-   request. Ya agregado. Sigue pendiente de confirmar contra un envío
-   real exitoso.
+   era la causa real del rechazo del CGI legacy.
+
+   **Con el `User-Agent` corregido, el SII respondió por primera vez con
+   un `<RECEPCIONDTE>` real** (no una página de error genérico) — pero
+   rechazó el envío: `STATUS=7`, `ERROR: SCH-00001: Invalid Schema Name`.
+   Comparando contra `EnvioDTE_v10.xsd` (schema real, `niclabs/DTE`)
+   encontramos dos bugs reales, ambos corregidos:
+
+   - **`<EnvioDTE>` llevaba un atributo `ID` que el schema no declara**
+     (el schema solo declara `version`; el único `ID` del sobre vive en
+     `<SetDTE>`). `envio.service.js` y `signature.service.js` ya no le
+     ponen `ID` a `<EnvioDTE>`; la firma del sobre ahora referencia el
+     `ID` de `<SetDTE>` (que es lo que el propio comentario del schema
+     dice: *"Firma Digital sobre SetDTE"*).
+   - **Bug de canonicalización (más sutil, encontrado por test antes de
+     gastar otro folio real)**: el SII exige C14N "plain"
+     (`http://www.w3.org/TR/2001/REC-xml-c14n-20010315`), no
+     exclusive-c14n. Esa variante SÍ arrastra los namespaces del
+     ancestro hacia la forma canónica del nodo raíz de un subset firmado
+     — es su comportamiento documentado (la razón por la que existe
+     Exclusive C14N). El `<DTE>` se firma standalone (sin ancestro) pero
+     se transmite embebido dentro de `<EnvioDTE xmlns="...">` — sin que
+     `<DTE>` declare esos mismos `xmlns` explícitamente, el digest
+     calculado al firmar y el que ve el SII al validar difieren, y la
+     firma del `Documento` queda inválida apenas se arma el sobre (un
+     rechazo real distinto — de firma, no de schema — que habría
+     aparecido en el SIGUIENTE intento real). `dte.orchestrator.js` ahora
+     declara en el `<DTE>` standalone los mismos `xmlns` que tendrá el
+     `<EnvioDTE>` que lo va a envolver, y un test dedicado en
+     `signature.service.test.js` reproduce el bug y confirma el fix.
+
+   Pendiente de validar contra un envío real exitoso (folio 30 sigue sin
+   confirmarse aceptado — próximo intento con ambos fixes).
 
    Pendiente de validar contra respuestas reales:
-   - Que el fix del `User-Agent` efectivamente resuelva el error de
-     upload (próximo intento).
    - El formato de respuesta de `GetTokenFromSeed.jws` (¿mismo patrón de
      `xsi:type` + entidades que `CrSeed.jws`? probablemente sí, ya que
      `CrSeed.jws` lo confirmó, pero falta ver una respuesta real de

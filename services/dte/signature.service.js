@@ -256,15 +256,28 @@ function signDocumentoEnDte(dteXml, { privateKeyPem, certificatePem, documentoId
 }
 
 /**
- * Firma el sobre <EnvioDTE ID="..."> completo (Carátula + SetDTE con los
- * documentos ya firmados individualmente dentro).
+ * Firma el sobre EnvioDTE (Carátula + SetDTE con los documentos ya
+ * firmados individualmente dentro). Referencia el <SetDTE ID="..."> —
+ * el único elemento del sobre con atributo ID según EnvioDTE_v10.xsd — y
+ * deja la Signature como hermana suya dentro de <EnvioDTE>:
+ *
+ *   <EnvioDTE version="1.0">
+ *     <SetDTE ID="SetDoc">...</SetDTE>
+ *     <Signature>...Reference URI="#SetDoc"...</Signature>
+ *   </EnvioDTE>
+ *
+ * <EnvioDTE> en sí NO lleva atributo ID (el schema solo declara
+ * "version") — ponerle uno (como hacía una versión anterior de este
+ * código, firmando el EnvioDTE en vez del SetDTE) el SII lo rechaza en
+ * la validación de schema: "SCH-00001: Invalid Schema Name".
  */
-function signEnvioDte(envioDteXml, { privateKeyPem, certificatePem, envioId }) {
+function signEnvioDte(envioDteXml, { privateKeyPem, certificatePem, setDteId }) {
   return signElement(envioDteXml, {
     privateKeyPem,
     certificatePem,
-    elementLocalName: 'EnvioDTE',
-    elementId: envioId,
+    elementLocalName: 'SetDTE',
+    elementId: setDteId,
+    containerLocalName: 'EnvioDTE',
   });
 }
 
