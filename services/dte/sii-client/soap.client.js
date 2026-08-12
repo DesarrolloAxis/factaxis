@@ -139,14 +139,36 @@ async function getToken(ambiente, semillaFirmadaXml) {
  * /cgi_dte/UPL/DTEUpload con el token en la cookie/header y el XML como
  * archivo adjunto.
  */
-function enviarDte(ambiente, { envioDteXml, rutEmisor, rutEnvia }, token) {
-  const host = hostFor(ambiente);
+/**
+ * Arma el body multipart/form-data (RFC1867) para DTEUpload, sin tocar la
+ * red — separado de enviarDte() para poder testear la construcción sola.
+ *
+ * El SII histórico espera el XML declarado (y codificado) en ISO-8859-1,
+ * no UTF-8 — convención heredada de los '2000 que sigue vigente hoy
+ * (documentada en múltiples integraciones reales de terceros). Sin la
+ * declaración de encoding, un parser legacy puede rechazar el documento
+ * como "SCH-00001: Invalid Schema Name" apenas el contenido trae tildes
+ * (confirmado contra maullin.sii.cl, CASO 4816286-1 folio 30 — el
+ * rechazo persistía incluso con el schema y la firma ya corregidos). El
+ * prólogo XML va ANTES del elemento raíz, así que no afecta ningún digest
+ * XMLDSig (esos se calculan sobre subárboles ya firmados).
+ *
+ * OJO: esto asume que el contenido solo usa caracteres Latin-1 (tildes,
+ * eñe, etc. — el caso real de nombres/giros en español). Un caracter
+ * fuera de ese rango (comillas tipográficas, guión largo, emoji) se
+ * corrompería silenciosamente al codificar como latin1 — no debería
+ * aparecer en datos de negocio reales, pero si el SII vuelve a rechazar
+ * por caracteres raros, revisar acá primero.
+ */
+function buildEnviarDteBody({ envioDteXml, rutEmisor, rutEnvia }) {
   const [rutEmisorNum] = String(rutEmisor).split('-');
   const [rutEnviaNum] = String(rutEnvia || rutEmisor).split('-');
 
   const boundary = `----factaxisBoundary${Date.now()}`;
   const fileFieldName = 'archivo';
   const fileName = 'envio.xml';
+
+  const envioDteXmlConProlog = `<?xml version="1.0" encoding="ISO-8859-1"?>${envioDteXml}`;
 
   const parts = [
     `--${boundary}\r\n` +
@@ -159,10 +181,16 @@ function enviarDte(ambiente, { envioDteXml, rutEmisor, rutEnvia }, token) {
       `Content-Disposition: form-data; name="dvCompany"\r\n\r\n${String(rutEmisor).split('-')[1]}\r\n`,
     `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="${fileFieldName}"; filename="${fileName}"\r\n` +
-      `Content-Type: text/xml\r\n\r\n${envioDteXml}\r\n`,
+      `Content-Type: text/xml; charset=ISO-8859-1\r\n\r\n${envioDteXmlConProlog}\r\n`,
     `--${boundary}--\r\n`,
   ];
-  const body = Buffer.from(parts.join(''), 'utf8');
+  const body = Buffer.from(parts.join(''), 'latin1');
+  return { body, boundary };
+}
+
+function enviarDte(ambiente, { envioDteXml, rutEmisor, rutEnvia }, token) {
+  const host = hostFor(ambiente);
+  const { body, boundary } = buildEnviarDteBody({ envioDteXml, rutEmisor, rutEnvia });
 
   return new Promise((resolve, reject) => {
     const req = https.request(
@@ -248,4 +276,5 @@ module.exports = {
   // exportados para tests / diagnóstico de respuestas SOAP crudas del SII:
   extractSoapReturn,
   soapRequest,
+  buildEnviarDteBody,
 };
