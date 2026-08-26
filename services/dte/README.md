@@ -166,24 +166,46 @@ entre corridas.
    atributo y fallaba con "No se pudo extraer SEMILLA de la respuesta"
    aunque la llamada SOAP en sí había funcionado (`ESTADO=00`, semilla
    real recibida). Ya corregido: el regex de `extractSoapReturn()` ahora
-   acepta atributos arbitrarios en el tag de apertura. Sigue sin
-   confirmarse el formato exacto de `GetTokenFromSeed.jws` y
-   `QueryEstUp.jws` (se asume el mismo patrón por analogía, pero falta
-   probarlo en un envío real completo). Lo que SÍ queda confirmado: la
-   red desde Railway alcanza `maullin.sii.cl` sin problema, y el
-   intercambio SOAP de semilla funciona de punta a punta contra el
-   ambiente real.
+   acepta atributos arbitrarios en el tag de apertura. Lo que SÍ queda
+   confirmado: la red desde Railway alcanza `maullin.sii.cl` sin
+   problema, y el intercambio SOAP de semilla funciona de punta a punta
+   contra el ambiente real.
 
-   Pendiente de validar contra respuestas reales:
-   - El formato de respuesta de `GetTokenFromSeed.jws` (¿mismo patrón de
-     `xsi:type` + entidades que `CrSeed.jws`? probablemente sí, pero no
-     confirmado todavía).
-   - El formato multipart exacto que espera `/cgi_dte/UPL/DTEUpload`
-     (campos `rutSender`/`dvSender`/`rutCompany`/`dvCompany`/`archivo`
-     son la mejor aproximación disponible, no confirmados contra el
-     servicio real).
-   - El mapeo de códigos de estado de `mapEstadoSii()` — es una
-     aproximación razonable, no una tabla oficial confirmada.
+   **Actualización — verificado contra los manuales oficiales del SII**
+   (no ya por analogía) y corregido en `soap.client.js`:
+   - `GetTokenFromSeed.jws`: el request ahora usa exactamente el formato
+     del manual (`<m:getToken xmlns:m="...">`, `<pszXml
+     xsi:type="xsd:string">`), y los errores sin `TOKEN` en la respuesta
+     ahora se traducen con la tabla oficial de 15 estados (00–12, 21, -3,
+     -07) en vez de solo volcar el XML crudo.
+   - `QueryEstUp.jws` **tenía un bug real**: el request mandaba 6
+     parámetros (`RutCompania`, `DvCompania`, `RutReceptor`,
+     `DvReceptor`, `TrackId`, `Token`), pero el WSDL oficial de
+     `QueryEstUp.jws` solo define 4
+     (`RutCompania, DvCompania, TrackId, Token`) — `RutReceptor`/
+     `DvReceptor` pertenecen a `QueryEstDte.jws`, un servicio *distinto*
+     (consulta de un DTE puntual por folio, no el estado de un envío por
+     `trackId`). Ya corregido.
+   - `DTEUpload` (`enviarDte`) **le faltaba el header `User-Agent` con
+     "PROG 1.0"** — el manual oficial ("Envío Automático DTE",
+     OI2003_UPDTE_MDE_1.5) advierte textualmente que sin ese parámetro en
+     el User-Agent el servidor puede no devolver el formato de salida en
+     XML. Ya agregado. También se reescribió el parseo de la respuesta
+     para usar la estructura oficial completa de `<RECEPCIONDTE>`
+     (`STATUS`, `TRACKID`, `DETAIL`/`ERROR`) con la tabla de 9 códigos de
+     `STATUS` documentados, en vez de solo buscar `TRACKID` a ciegas — un
+     rechazo por esquema inválido (`STATUS=7`) o firma inválida
+     (`STATUS=8`) ahora queda con una `glosa_respuesta` legible en
+     `dte_envios`, no un volcado crudo de XML.
+   - Los campos del multipart (`rutSender`/`dvSender`/`rutCompany`/
+     `dvCompany`/`archivo`) ya estaban correctos — confirmado contra el
+     Anexo 3 del manual oficial.
+   - Sigue sin confirmar contra una respuesta *real* del ambiente de
+     certificación (los manuales dan el formato documentado, no
+     reemplazan una prueba end-to-end): el mapeo de `mapEstadoSii()`
+     (`QueryEstUp` usa códigos tipo `DOK`/`RCH`/`EPR`, sin tabla oficial
+     confirmada todavía, a diferencia de `QueryEstDte` que sí la tiene
+     documentada) — ajustar según lo que devuelva el primer envío real.
 5. **Algoritmo de firma**: el pipeline usa SHA1withRSA / rsa-sha1 (lo
    histórico del SII, y lo que exige LibreDTE hoy). Si el set de pruebas
    de certificación rechaza por algoritmo, el cambio es acotado: las
