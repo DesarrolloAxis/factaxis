@@ -357,6 +357,10 @@ async function emitir(input) {
       folio,
       envioDteXmlFirmado: envioFirmado,
       clientMode,
+      // Mismo RUT que se usó como RutEnvia en la Carátula (línea arriba):
+      // debe coincidir con el titular del certificado usado para
+      // autenticar (GetToken), no necesariamente con la empresa emisora.
+      rutEnvia: rutCertificado || tenant.rut,
     });
 
     await documentosRepo.updateEstado(documentoId, tenantId, 'enviado');
