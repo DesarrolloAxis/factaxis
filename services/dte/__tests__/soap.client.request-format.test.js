@@ -133,4 +133,22 @@ describe('soap.client — getToken (GetTokenFromSeed.jws)', () => {
 
     await expect(soapClient.getToken('certificacion', '<getToken/>')).rejects.toThrow(/firma inválida/);
   });
+
+  test('REGRESIÓN: el Envelope declara xmlns:xsi/xmlns:xsd (requerido por el atributo xsi:type de pszXml)', async () => {
+    // Confirmado contra maullin.sii.cl real: sin esta declaración, el SII
+    // rechaza con SAXParseException "prefix xsi ... is not bound" (HTTP 500) —
+    // no es una suposición, costó un CAF real de certificación depurarlo.
+    const soapClient = require('../sii-client/soap.client');
+    const capture = mockHttpsOnce({
+      statusCode: 200,
+      body: '<Body><getTokenReturn>&lt;SII:RESPUESTA&gt;&lt;SII:RESP_BODY&gt;&lt;TOKEN&gt;abc&lt;/TOKEN&gt;&lt;/SII:RESP_BODY&gt;&lt;/SII:RESPUESTA&gt;</getTokenReturn></Body>',
+    });
+
+    await soapClient.getToken('certificacion', '<getToken/>');
+
+    const sent = capture.getWrittenBody();
+    expect(sent).toContain('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"');
+    expect(sent).toContain('xmlns:xsd="http://www.w3.org/2001/XMLSchema"');
+    expect(sent).toContain('xsi:type="xsd:string"');
+  });
 });

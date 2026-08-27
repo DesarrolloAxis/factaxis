@@ -45,11 +45,25 @@ function hostFor(ambiente) {
   return host;
 }
 
-/** Envía un sobre SOAP 1.1 armado a mano por HTTPS POST y devuelve el body de la respuesta. */
+/**
+ * Envía un sobre SOAP 1.1 armado a mano por HTTPS POST y devuelve el body
+ * de la respuesta. Declara xmlns:xsi/xmlns:xsd en el Envelope (igual que
+ * el ejemplo oficial del manual de Autenticación Automática) — sin esto,
+ * cualquier body que use un atributo `xsi:type` (como getToken(), que usa
+ * `<pszXml xsi:type="xsd:string">`) revienta con
+ * SAXParseException/"prefix xsi ... is not bound" en el servidor real del
+ * SII. Confirmado contra maullin.sii.cl (no es una suposición): un CAF
+ * real se gastó averiguando esto — no volver a esta versión sin xsi/xsd.
+ */
 function soapRequest(host, path, soapAction, bodyXml) {
   const envelope =
     '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">' +
+    '<SOAP-ENV:Envelope ' +
+    'xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" ' +
+    'xmlns:SOAPENC="http://schemas.xmlsoap.org/soap/encoding/" ' +
+    'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+    'xmlns:xsd="http://www.w3.org/2001/XMLSchema" ' +
+    'SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">' +
     '<SOAP-ENV:Body>' +
     bodyXml +
     '</SOAP-ENV:Body>' +
