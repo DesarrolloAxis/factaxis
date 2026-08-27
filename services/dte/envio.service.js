@@ -109,8 +109,15 @@ function signEnvioDte(envioDteXml, { privateKeyPem, certificatePem, setDteId = '
  * Envía el EnvioDTE firmado al SII (o al mock) y persiste el resultado en
  * dte_envios. Requiere un token vigente (lo obtiene automáticamente vía
  * sii-auth.service si no se pasa uno).
+ *
+ * `rutEnvia` (opcional) debe ser el RUT del titular del certificado
+ * digital usado para autenticar (puede ser una persona natural distinta
+ * de la empresa emisora, caso típico cuando el certificado está a nombre
+ * del representante) — default: tenant.rut si no se especifica. Esto
+ * DEBE coincidir con el RUT detrás del token con el que se autenticó
+ * (GetToken), o el SII rechaza el upload como sender no autorizado.
  */
-async function enviar({ tenantId, tenant, dteDocumentoId, tipoDte, folio, envioDteXmlFirmado, clientMode, token }) {
+async function enviar({ tenantId, tenant, dteDocumentoId, tipoDte, folio, envioDteXmlFirmado, clientMode, token, rutEnvia }) {
   if (!tenantId || !tenant || !dteDocumentoId || !envioDteXmlFirmado) {
     throw new EnvioError('enviar requiere tenantId, tenant, dteDocumentoId y envioDteXmlFirmado');
   }
@@ -122,7 +129,7 @@ async function enviar({ tenantId, tenant, dteDocumentoId, tipoDte, folio, envioD
   try {
     const result = await client.enviarDte(
       tenant.ambiente_sii,
-      { envioDteXml: envioDteXmlFirmado, rutEmisor: tenant.rut, rutEnvia: tenant.rut, tipoDte, folio },
+      { envioDteXml: envioDteXmlFirmado, rutEmisor: tenant.rut, rutEnvia: rutEnvia || tenant.rut, tipoDte, folio },
       authToken
     );
     trackId = result.trackId;

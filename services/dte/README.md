@@ -166,88 +166,111 @@ entre corridas.
    atributo y fallaba con "No se pudo extraer SEMILLA de la respuesta"
    aunque la llamada SOAP en sí había funcionado (`ESTADO=00`, semilla
    real recibida). Ya corregido: el regex de `extractSoapReturn()` ahora
-   acepta atributos arbitrarios en el tag de apertura. Sigue sin
-   confirmarse el formato exacto de `GetTokenFromSeed.jws` y
-   `QueryEstUp.jws` (se asume el mismo patrón por analogía, pero falta
-   probarlo en un envío real completo). Lo que SÍ queda confirmado: la
-   red desde Railway alcanza `maullin.sii.cl` sin problema, y el
-   intercambio SOAP de semilla funciona de punta a punta contra el
-   ambiente real.
+   acepta atributos arbitrarios en el tag de apertura. Lo que SÍ queda
+   confirmado: la red desde Railway alcanza `maullin.sii.cl` sin
+   problema, y el intercambio SOAP de semilla funciona de punta a punta
+   contra el ambiente real.
 
-   **`getSeed`/`getToken` ya confirmados de punta a punta contra el SII
-   real** (ver arriba). `enviarDte` (POST multipart a `DTEUpload`) llegó a
-   ejecutarse contra el servidor real por primera vez y el SII respondió
-   con una página HTML genérica: *"HA OCURRIDO UN ERROR EN EL UPLOAD DEL
-   ARCHIVO DE DOCUMENTOS TRIBUTARIOS ELECTRONICOS"* — o sea, el POST llegó
-   y fue reconocido como intento de upload, pero algo del formato no
-   pasó. Investigando contra referencias públicas (el ejemplo oficial
-   `ejem_upload.txt` del propio sitio del SII, y la librería histórica
-   `niclabs/DTE`), confirmamos que el orden y nombres de los campos
-   multipart (`rutSender`→`dvSender`→`rutCompany`→`dvCompany`→`archivo`)
-   ya eran correctos, pero **faltaba el header `User-Agent`** — tanto el
-   ejemplo oficial del SII como `niclabs/DTE`
-   (`UPLOAD_SII_HEADER_VALUE`) mandan explícitamente
-   `Mozilla/4.0 (compatible; PROG 1.0; Windows NT 5.0; YComp 5.0.2.4)`,
-   y `https.request` de Node no manda ningún `User-Agent` por defecto —
-   era la causa real del rechazo del CGI legacy.
+   **`getSeed`/`getToken` confirmados de punta a punta contra el SII
+   real**: `GetSeed` → firmar la semilla con el certificado real →
+   `GetTokenFromSeed` → token real obtenido, sin errores. Esto no
+   consume folios (solo `asignarFolio` del orquestador lo hace), así que
+   quedó validado repetidamente sin riesgo.
 
-   **Con el `User-Agent` corregido, el SII respondió por primera vez con
-   un `<RECEPCIONDTE>` real** (no una página de error genérico) — pero
-   rechazó el envío: `STATUS=7`, `ERROR: SCH-00001: Invalid Schema Name`.
-   Comparando contra `EnvioDTE_v10.xsd` (schema real, `niclabs/DTE`)
-   encontramos dos bugs reales, ambos corregidos:
+   `enviarDte` (POST multipart a `DTEUpload`) pasó por varias rondas
+   reales de depuración, cada una consumiendo un folio real de
+   certificación — los hallazgos, en orden:
 
-   - **`<EnvioDTE>` llevaba un atributo `ID` que el schema no declara**
-     (el schema solo declara `version`; el único `ID` del sobre vive en
-     `<SetDTE>`). `envio.service.js` y `signature.service.js` ya no le
-     ponen `ID` a `<EnvioDTE>`; la firma del sobre ahora referencia el
-     `ID` de `<SetDTE>` (que es lo que el propio comentario del schema
-     dice: *"Firma Digital sobre SetDTE"*).
-   - **Bug de canonicalización (más sutil, encontrado por test antes de
-     gastar otro folio real)**: el SII exige C14N "plain"
-     (`http://www.w3.org/TR/2001/REC-xml-c14n-20010315`), no
-     exclusive-c14n. Esa variante SÍ arrastra los namespaces del
-     ancestro hacia la forma canónica del nodo raíz de un subset firmado
-     — es su comportamiento documentado (la razón por la que existe
-     Exclusive C14N). El `<DTE>` se firma standalone (sin ancestro) pero
-     se transmite embebido dentro de `<EnvioDTE xmlns="...">` — sin que
-     `<DTE>` declare esos mismos `xmlns` explícitamente, el digest
-     calculado al firmar y el que ve el SII al validar difieren, y la
-     firma del `Documento` queda inválida apenas se arma el sobre (un
-     rechazo real distinto — de firma, no de schema — que habría
-     aparecido en el SIGUIENTE intento real). `dte.orchestrator.js` ahora
-     declara en el `<DTE>` standalone los mismos `xmlns` que tendrá el
-     `<EnvioDTE>` que lo va a envolver, y un test dedicado en
-     `signature.service.test.js` reproduce el bug y confirma el fix.
+   1. **Faltaba el header `User-Agent`.** El primer intento real devolvió
+      una página HTML genérica: *"HA OCURRIDO UN ERROR EN EL UPLOAD DEL
+      ARCHIVO..."* — el POST llegó y fue reconocido como intento de
+      upload, pero el CGI legacy de `DTEUpload` asume un browser real.
+      Tanto el ejemplo oficial del SII (`ejem_upload.txt`) como la
+      librería histórica `niclabs/DTE` (`UPLOAD_SII_HEADER_VALUE`) mandan
+      explícitamente `Mozilla/4.0 (compatible; PROG 1.0; Windows NT 5.0;
+      YComp 5.0.2.4)`, y `https.request` de Node no manda ningún
+      `User-Agent` por defecto. Los campos del multipart
+      (`rutSender`→`dvSender`→`rutCompany`→`dvCompany`→`archivo`) ya
+      estaban correctos — confirmado contra el Anexo 3 del manual
+      oficial ("Envío Automático DTE", OI2003_UPDTE_MDE_1.5).
 
-   **Con ambos fixes arriba (schema + firma) el SII siguió rechazando con
-   el mismo `SCH-00001: Invalid Schema Name`** — la firma y el schema ya
-   validaban localmente, así que el problema estaba en otro lado. Tercer
-   hallazgo: **el XML no declaraba encoding**. El SII histórico espera el
-   `EnvioDTE` en **ISO-8859-1**, no UTF-8 (convención documentada en
-   varias integraciones reales de terceros, heredada de los 2000). Sin
-   `<?xml version="1.0" encoding="..."?>` y con contenido real que trae
-   tildes (`Cajón`, `Villa Alemana`, etc.) mandado como UTF-8 sin avisar,
-   un parser Java legacy puede interpretarlo mal y rechazarlo con el mismo
-   error de schema genérico. `soap.client.js` ahora antepone
-   `<?xml version="1.0" encoding="ISO-8859-1"?>` al `EnvioDTE` y codifica
-   el body completo del multipart como `latin1` (equivalente práctico a
-   ISO-8859-1 para el rango de caracteres que aparece en datos de negocio
-   en español) — el prólogo va antes del elemento raíz, así que no toca
-   ningún digest XMLDSig ya calculado. Ver `buildEnviarDteBody()`
-   (refactor de `enviarDte()` para poder testear la construcción del body
-   sin red) y sus tests.
+   2. **Con el `User-Agent` corregido, el SII respondió con un
+      `<RECEPCIONDTE>` real** (no una página de error genérico) — pero
+      rechazó el envío: `STATUS=7`, `ERROR: SCH-00001: Invalid Schema
+      Name`. Comparando contra `EnvioDTE_v10.xsd` (schema real,
+      `niclabs/DTE`) encontramos dos bugs reales:
+      - **`<EnvioDTE>` llevaba un atributo `ID` que el schema no
+        declara** (el schema solo declara `version`; el único `ID` del
+        sobre vive en `<SetDTE>`). `envio.service.js` ya no le pone `ID`
+        a `<EnvioDTE>`; la firma del sobre referencia el `ID` de
+        `<SetDTE>` (lo que dice el propio comentario del schema: *"Firma
+        Digital sobre SetDTE"*).
+      - **Bug de canonicalización** (más sutil, encontrado por test antes
+        de gastar otro folio real): el SII exige C14N "plain", no
+        exclusive-c14n — esa variante SÍ arrastra los namespaces del
+        ancestro hacia la forma canónica del nodo raíz de un subset
+        firmado. El `<DTE>` se firma standalone pero se transmite
+        embebido dentro de `<EnvioDTE xmlns="...">`; sin que `<DTE>`
+        declare esos mismos `xmlns` explícitamente, el digest calculado
+        al firmar y el que ve el SII al validar difieren.
+        `dte.orchestrator.js` ahora declara en el `<DTE>` standalone los
+        mismos `xmlns` que tendrá el `<EnvioDTE>` que lo envuelve, con
+        test dedicado en `signature.service.test.js`.
 
-   Pendiente de validar contra un envío real exitoso (folio 30 sigue sin
-   confirmarse aceptado — próximo intento con los tres fixes).
+   3. **Con ambos fixes arriba, el SII siguió rechazando con el mismo
+      `SCH-00001: Invalid Schema Name`** — firma y schema ya validaban
+      localmente. Tercer hallazgo: **el XML no declaraba encoding**. El
+      SII histórico espera el `EnvioDTE` en **ISO-8859-1**, no UTF-8
+      (convención heredada de los 2000, documentada en integraciones
+      reales de terceros). Con contenido real que trae tildes (`Cajón`,
+      `Villa Alemana`) mandado como UTF-8 sin avisar, un parser Java
+      legacy lo rechaza con el mismo error genérico. `soap.client.js`
+      ahora antepone `<?xml version="1.0" encoding="ISO-8859-1"?>` al
+      `EnvioDTE` y codifica el body completo del multipart como `latin1`
+      — el prólogo va antes del elemento raíz, así que no toca ningún
+      digest XMLDSig ya calculado. Ver `buildEnviarDteBody()` (refactor
+      de `enviarDte()` para testear la construcción del body sin red).
+
+   4. **`GetTokenFromSeed.jws` reventaba con `SAXParseException`
+      (HTTP 500) en un intento posterior**: `The prefix "xsi" for
+      attribute "xsi:type" associated with an element type "pszXml" is
+      not bound`. El request de `getToken()` usa `xsi:type="xsd:string"`
+      en `<pszXml>` (siguiendo el manual al pie de la letra), pero el
+      Envelope SOAP compartido (`soapRequest()`) solo declaraba
+      `xmlns:SOAP-ENV` — nunca `xmlns:xsi`/`xmlns:xsd`. Ya corregido: el
+      Envelope ahora declara `xmlns:SOAPENC`, `xmlns:xsi`, `xmlns:xsd` y
+      `SOAP-ENV:encodingStyle`, igual que el ejemplo oficial del manual.
+
+   5. **`rutEnvia` (RutSender del multipart) quedaba hardcodeado a
+      `tenant.rut`**, ignorando el RUT real del titular del certificado
+      (`rutCertificado`) — el mismo valor que ya se usaba correctamente
+      para el `<RutEnvia>` dentro de la Carátula del XML, pero que nunca
+      llegaba a la llamada HTTP real. `DTEUpload` valida `rutSender`
+      contra la identidad detrás del `Token` con el que se autenticó, así
+      que un mismatch acá es motivo de rechazo. Ya corregido:
+      `envio.service.js#enviar()` propaga `rutEnvia` desde el
+      orquestador.
+
+   6. **`nro_resolucion_sii`/`fecha_resolucion_sii` del tenant estaban en
+      `NULL`** — el orquestador caía en un default silencioso (`NroResol
+      = '0'`, `FchResol` = fecha de HOY) para la Carátula, casi con
+      certeza distinto de la fecha real en que el SII autorizó al tenant.
+      Configurado con la Resolución Exenta N°80 de 2014 (migración
+      `013_add_resolucion_sii_almasend`).
+
+   Con los 6 fixes de arriba aplicados en conjunto, la autenticación
+   (`GetSeed`/`GetToken`) quedó confirmada de punta a punta contra el SII
+   real, pero **`enviarDte` con TODOS los fixes juntos todavía no se
+   probó** — se agotaron los folios de certificación disponibles (4)
+   antes de llegar a intentarlo con el fix #4 (namespace) ya aplicado.
+   Próximo paso: pedir más folios y confirmar un `STATUS=0` real.
 
    Pendiente de validar contra respuestas reales:
-   - El formato de respuesta de `GetTokenFromSeed.jws` (¿mismo patrón de
-     `xsi:type` + entidades que `CrSeed.jws`? probablemente sí, ya que
-     `CrSeed.jws` lo confirmó, pero falta ver una respuesta real de
-     `GetTokenFromSeed.jws` específicamente).
-   - El mapeo de códigos de estado de `mapEstadoSii()` — es una
-     aproximación razonable, no una tabla oficial confirmada.
+   - Un `enviarDte` exitoso de punta a punta con todos los fixes juntos.
+   - El mapeo de códigos de estado de `mapEstadoSii()` (`QueryEstUp` usa
+     códigos tipo `DOK`/`RCH`/`EPR`) — es una aproximación razonable, no
+     una tabla oficial confirmada (a diferencia de `QueryEstDte`, que sí
+     la tiene documentada).
 5. **Algoritmo de firma**: el pipeline usa SHA1withRSA / rsa-sha1 (lo
    histórico del SII, y lo que exige LibreDTE hoy). Si el set de pruebas
    de certificación rechaza por algoritmo, el cambio es acotado: las

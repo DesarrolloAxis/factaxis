@@ -83,6 +83,48 @@ describe('envio.service (mock)', () => {
     expect(envios.find((e) => e.id === envioId)).toBeTruthy();
   });
 
+  test('enviar propaga rutEnvia (titular del certificado) al cliente SII, no tenant.rut', async () => {
+    // Regresión: rutEnvia quedaba hardcodeado a tenant.rut, ignorando el
+    // RUT real del titular del certificado (rutCertificado) -- descubierto
+    // al probar contra el SII real, donde el DTEUpload usa este campo para
+    // validar el sender contra la identidad detrás del token.
+    const doc = await documentosRepo.insert({
+      tenantId: tenant.id,
+      tipoDte: 33,
+      folio: 3,
+      fechaEmision: '2026-08-10',
+      rutReceptor: '66666666-6',
+      razonSocialReceptor: 'Cliente Ejemplo',
+      montoNeto: 1000,
+      montoIva: 190,
+      montoTotal: 1190,
+      estadoInterno: 'emitido',
+    });
+
+    const original = mockClient.enviarDte;
+    let capturedArgs;
+    mockClient.enviarDte = async (ambiente, args, token) => {
+      capturedArgs = args;
+      return original(ambiente, args, token);
+    };
+    try {
+      await envioService.enviar({
+        tenantId: tenant.id,
+        tenant, // tenant.rut = 78138404-6 (ALMASEND)
+        dteDocumentoId: doc.id,
+        tipoDte: 33,
+        folio: 3,
+        envioDteXmlFirmado: '<EnvioDTE ID="X"></EnvioDTE>',
+        rutEnvia: '16891500-4', // RUT del titular del certificado, distinto del tenant
+      });
+    } finally {
+      mockClient.enviarDte = original;
+    }
+
+    expect(capturedArgs.rutEnvia).toBe('16891500-4');
+    expect(capturedArgs.rutEmisor).toBe(tenant.rut);
+  });
+
   test('enviar persiste el fallo si el envio al SII lanza un error', async () => {
     const doc = await documentosRepo.insert({
       tenantId: tenant.id,

@@ -49,7 +49,12 @@ function parsePfx(pfxBuffer, password) {
   try {
     p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, password);
   } catch (err) {
-    throw new SignatureError('No se pudo abrir el .pfx: contraseña incorrecta o archivo corrupto');
+    // No asumir "contraseña incorrecta": node-forge lanza el mismo tipo de
+    // error genérico también cuando el .pfx usa un algoritmo de cifrado que
+    // no soporta (p.ej. RC2-40-CBC en certificados antiguos) con la
+    // contraseña correcta. Incluir err.message es la única forma de
+    // distinguir un caso del otro sin adivinar.
+    throw new SignatureError(`No se pudo abrir el .pfx (contraseña incorrecta, archivo corrupto, o algoritmo de cifrado no soportado): ${err.message}`);
   }
 
   const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
